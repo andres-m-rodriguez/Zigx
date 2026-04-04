@@ -1,48 +1,27 @@
 const std = @import("std");
-const zigx = @import("zigx.zig");
+const zigx = @import("zigx");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-
-    var app = zigx.App.init(42069);
-    defer app.deinit(allocator);
-    app.addZigxPages(allocator);
-
-    try app.listen(allocator);
+    // Prints to stderr, ignoring potential errors.
+    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    try zigx.bufferedPrint();
 }
 
-fn indexHandler(ctx: *zigx.RequestContext) !zigx.Response {
-    return zigx.Response.fmtHtml(ctx.allocator, @embedFile("index.html"), .{"Andres"});
-}
-fn usersByIdHandler(ctx: *zigx.RequestContext) !zigx.Response {
-    const id = try ctx.params.get("id").?.asInt();
-    return try zigx.Response.fmtJson(ctx.allocator, .{
-        .name = "User",
-        .id = id,
-    });
+test "simple test" {
+    const gpa = std.testing.allocator;
+    var list: std.ArrayList(i32) = .empty;
+    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
+    try list.append(gpa, 42);
+    try std.testing.expectEqual(@as(i32, 42), list.pop());
 }
 
-fn usersHandler(_: *zigx.RequestContext) !zigx.Response {
-    return zigx.Response.json(
-        \\{"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]}
-    );
-}
-
-fn createUserHandler(_: *zigx.RequestContext) !zigx.Response {
-    return zigx.Response.json(
-        \\{"status": "created", "id": 3}
-    ).withStatus(.created);
-}
-
-fn errorHandler(_: *zigx.RequestContext) !zigx.Response {
-    return zigx.Response.html(
-        \\<html>
-        \\  <head><title>500 Error</title></head>
-        \\  <body>
-        \\    <h1>Internal Server Error</h1>
-        \\    <p>Okay, you know what? This one is on me.</p>
-        \\  </body>
-        \\</html>
-    ).withStatus(.internal_server_error);
+test "fuzz example" {
+    const Context = struct {
+        fn testOne(context: @This(), input: []const u8) anyerror!void {
+            _ = context;
+            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
+            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
+        }
+    };
+    try std.testing.fuzz(Context{}, Context.testOne, .{});
 }
