@@ -1,27 +1,61 @@
 const std = @import("std");
 const zigx = @import("zigx");
+const http = std.http;
+const ServerContext = @import("Server/Types.zig").ServerContext;
+const ApplicationBuilder = @import("./Server/ApplicationBuilder.zig");
 
-pub fn main() !void {
-    // Prints to stderr, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    try zigx.bufferedPrint();
+pub fn main(init: std.process.Init) !void {
+    var builder = ApplicationBuilder.init();
+    defer builder.deinit();
+
+    var app = builder.build();
+    app.mapGet(init.gpa, "/", Home);
+    app.mapGet(init.gpa, "/api", Api);
+    app.mapGet(init.gpa, "/home/{id}", WithParam);
+    app.mapGet(init.gpa, "/home/{id}/users/{tester}", WithParam2);
+
+    try app.run(init.io, init.arena.allocator());
 }
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+pub fn Home(ctx: *ServerContext) !void {
+    try ctx.request.respond("{\"message\": \"Hello from Home\"}", .{
+        .extra_headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+        },
+    });
 }
 
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
-    };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+pub fn Api(ctx: *ServerContext) !void {
+    try ctx.request.respond("{\"message\": \"Welcome to the API\"}", .{
+        .extra_headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+        },
+    });
+}
+
+pub fn WithParam(ctx: *ServerContext) !void {
+    try ctx.request.respond("{\"message\": \"Welcome to the Params\"}", .{
+        .extra_headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+        },
+    });
+}
+
+pub fn WithParam2(ctx: *ServerContext) !void {
+    var data: std.json.ArrayHashMap([]const u8) = .{};
+
+    try data.map.put(ctx.arena, "message", "Welcome to the Params");
+
+    var it = ctx.params.iterator();
+    while (it.next()) |entry| {
+        try data.map.put(ctx.arena, entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    const json = try std.json.Stringify.valueAlloc(ctx.arena, data, .{});
+
+    try ctx.request.respond(json, .{
+        .extra_headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+        },
+    });
 }
