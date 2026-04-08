@@ -1,48 +1,61 @@
 const std = @import("std");
-const zigx = @import("zigx.zig");
+const zigx = @import("zigx");
+const http = std.http;
+const ServerContext = @import("Server/Types.zig").ServerContext;
+const ApplicationBuilder = @import("./Server/ApplicationBuilder.zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    var builder = ApplicationBuilder.init();
+    defer builder.deinit();
 
-    var app = zigx.App.init(42069);
-    defer app.deinit(allocator);
-    app.addZigxPages(allocator);
+    var app = builder.build();
+    app.mapGet(init.gpa, "/", Home);
+    app.mapGet(init.gpa, "/api", Api);
+    app.mapGet(init.gpa, "/home/{id}", WithParam);
+    app.mapGet(init.gpa, "/home/{id}/users/{tester}", WithParam2);
 
-    try app.listen(allocator);
+    try app.run(init.io, init.arena.allocator());
 }
 
-fn indexHandler(ctx: *zigx.RequestContext) !zigx.Response {
-    return zigx.Response.fmtHtml(ctx.allocator, @embedFile("index.html"), .{"Andres"});
-}
-fn usersByIdHandler(ctx: *zigx.RequestContext) !zigx.Response {
-    const id = try ctx.params.get("id").?.asInt();
-    return try zigx.Response.fmtJson(ctx.allocator, .{
-        .name = "User",
-        .id = id,
+pub fn Home(ctx: *ServerContext) !void {
+    try ctx.request.respond("{\"message\": \"Hello from Home\"}", .{
+        .extra_headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+        },
     });
 }
 
-fn usersHandler(_: *zigx.RequestContext) !zigx.Response {
-    return zigx.Response.json(
-        \\{"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]}
-    );
+pub fn Api(ctx: *ServerContext) !void {
+    try ctx.request.respond("{\"message\": \"Welcome to the API\"}", .{
+        .extra_headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+        },
+    });
 }
 
-fn createUserHandler(_: *zigx.RequestContext) !zigx.Response {
-    return zigx.Response.json(
-        \\{"status": "created", "id": 3}
-    ).withStatus(.created);
+pub fn WithParam(ctx: *ServerContext) !void {
+    try ctx.request.respond("{\"message\": \"Welcome to the Params\"}", .{
+        .extra_headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+        },
+    });
 }
 
-fn errorHandler(_: *zigx.RequestContext) !zigx.Response {
-    return zigx.Response.html(
-        \\<html>
-        \\  <head><title>500 Error</title></head>
-        \\  <body>
-        \\    <h1>Internal Server Error</h1>
-        \\    <p>Okay, you know what? This one is on me.</p>
-        \\  </body>
-        \\</html>
-    ).withStatus(.internal_server_error);
+pub fn WithParam2(ctx: *ServerContext) !void {
+    var data: std.json.ArrayHashMap([]const u8) = .{};
+
+    try data.map.put(ctx.arena, "message", "Welcome to the Params");
+
+    var it = ctx.params.iterator();
+    while (it.next()) |entry| {
+        try data.map.put(ctx.arena, entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    const json = try std.json.Stringify.valueAlloc(ctx.arena, data, .{});
+
+    try ctx.request.respond(json, .{
+        .extra_headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+        },
+    });
 }

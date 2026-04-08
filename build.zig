@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
     // to our consumers. We must give it a name because a Zig package can expose
     // multiple modules and consumers will need to be able to specify which
     // module they want to access.
-    const mod = b.addModule("Zigx", .{
+    const mod = b.addModule("zigx", .{
         // The root source file is the "entry point" of this module. Users of
         // this module will only be able to access public declarations contained
         // in this file, which means that if you have declarations that you
@@ -41,164 +41,24 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
-    // Create the zigxParser module first so it can be shared
-    const zigx_compiler_mod = b.createModule(.{
-        .root_source_file = b.path("src/Framework/Compiler/zigxParser.zig"),
-        .target = b.graph.host,
-    });
-
-    // Create the render_tree module (shared between server and client)
-    // Host version for code generation
-    const render_tree_host_mod = b.createModule(.{
-        .root_source_file = b.path("src/Framework/Shared/render_tree.zig"),
-        .target = b.graph.host,
-    });
-
-    // Native version for the server executable
-    const render_tree_native_mod = b.createModule(.{
-        .root_source_file = b.path("src/Framework/Shared/render_tree.zig"),
-        .target = target,
-    });
-
-    // Create the zig server parser module (for parsing zig code to find imports)
-    const zig_server_parser_mod = b.createModule(.{
-        .root_source_file = b.path("src/Framework/Compiler/server/parser.zig"),
-        .target = b.graph.host,
-    });
-
-    // Create codegen modules with zigxParser dependency
-    const codegen_placeholders = b.createModule(.{
-        .root_source_file = b.path("build/codegen/placeholders.zig"),
-        .target = b.graph.host,
-    });
-
-    const codegen_common = b.createModule(.{
-        .root_source_file = b.path("build/codegen/common.zig"),
-        .target = b.graph.host,
-        .imports = &.{
-            .{ .name = "placeholders", .module = codegen_placeholders },
-        },
-    });
-
-    const codegen_server = b.createModule(.{
-        .root_source_file = b.path("build/codegen/server.zig"),
-        .target = b.graph.host,
-        .imports = &.{
-            .{ .name = "common", .module = codegen_common },
-            .{ .name = "zigxParser", .module = zigx_compiler_mod },
-            .{ .name = "zigServerParser", .module = zig_server_parser_mod },
-            .{ .name = "render_tree", .module = render_tree_host_mod },
-        },
-    });
-
-    const codegen_client = b.createModule(.{
-        .root_source_file = b.path("build/codegen/client.zig"),
-        .target = b.graph.host,
-        .imports = &.{
-            .{ .name = "common", .module = codegen_common },
-            .{ .name = "zigxParser", .module = zigx_compiler_mod },
-            .{ .name = "render_tree", .module = render_tree_host_mod },
-        },
-    });
-
-    const codegen_routes = b.createModule(.{
-        .root_source_file = b.path("build/codegen/routes.zig"),
-        .target = b.graph.host,
-        .imports = &.{
-            .{ .name = "common", .module = codegen_common },
-            .{ .name = "zigxParser", .module = zigx_compiler_mod },
-        },
-    });
-
-    const zigx_generator = b.addExecutable(.{
-        .name = "zigx_generator",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("build/gen_zigx.zig"),
-            .target = b.graph.host,
-            .imports = &.{
-                .{ .name = "zigxParser", .module = zigx_compiler_mod },
-                .{ .name = "codegen/server.zig", .module = codegen_server },
-                .{ .name = "codegen/client.zig", .module = codegen_client },
-                .{ .name = "codegen/routes.zig", .module = codegen_routes },
-            },
-        }),
-    });
-
-    // Run the generator - outputs to src/gen/ (gitignored)
-    // Creates: src/gen/routes.zig, src/gen/server/*.zig, src/gen/client/*.zig
-    const zigx_files_scanner = b.addRunArtifact(zigx_generator);
-    zigx_files_scanner.addArg("src/gen/routes.zig");
-
-    // ============================================
-    // WASM Client Compilation
-    // ============================================
-
-    // WASM target for client-side code
-    const wasm_target = b.resolveTargetQuery(.{
-        .cpu_arch = .wasm32,
-        .os_tag = .freestanding,
-    });
-
-    // Create the render_tree module for WASM target
-    const render_tree_wasm_mod = b.createModule(.{
-        .root_source_file = b.path("src/Framework/Shared/render_tree.zig"),
-        .target = wasm_target,
-    });
-
-    // Create the differ module for WASM target (depends on render_tree)
-    const differ_wasm_mod = b.createModule(.{
-        .root_source_file = b.path("src/Framework/Client/differ.zig"),
-        .target = wasm_target,
-        .imports = &.{
-            .{ .name = "render_tree", .module = render_tree_wasm_mod },
-        },
-    });
-
-    // Create the client runtime module for WASM
-    const client_runtime_mod = b.createModule(.{
-        .root_source_file = b.path("src/Framework/Client/runtime.zig"),
-        .target = wasm_target,
-    });
-
-    // Build MyCounter WASM (MVP: hardcoded, later: scan src/gen/client/)
-    const client_wasm = b.addExecutable(.{
-        .name = "MyCounter",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/gen/client/MyCounter.zig"),
-            .target = wasm_target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "runtime", .module = client_runtime_mod },
-                .{ .name = "render_tree", .module = render_tree_wasm_mod },
-                .{ .name = "differ", .module = differ_wasm_mod },
-            },
-        }),
-    });
-    // WASM library - no entry point needed
-    client_wasm.entry = .disabled;
-    // WASM needs to export memory
-    client_wasm.export_memory = true;
-    // Force dynamic exports to be retained
-    client_wasm.rdynamic = true;
-
-    // Make WASM depend on generator
-    client_wasm.step.dependOn(&zigx_files_scanner.step);
-
-    // Install WASM to src/gen/wasm/ so it can be @embedFile'd by the server
-    const install_wasm = b.addInstallArtifact(client_wasm, .{
-        .dest_dir = .{ .override = .{ .custom = "../src/gen/wasm" } },
-    });
-    install_wasm.step.dependOn(&client_wasm.step);
-
-    // Create a step to build all WASM files
-    const wasm_step = b.step("wasm", "Build WASM client modules");
-    wasm_step.dependOn(&client_wasm.step);
-
+    // Here we define an executable. An executable needs to have a root module
+    // which needs to expose a `main` function. While we could add a main function
+    // to the module defined above, it's sometimes preferable to split business
+    // logic and the CLI into two separate modules.
+    //
+    // If your goal is to create a Zig library for others to use, consider if
+    // it might benefit from also exposing a CLI tool. A parser library for a
+    // data serialization format could also bundle a CLI syntax checker, for example.
+    //
+    // If instead your goal is to create an executable, consider if users might
+    // be interested in also being able to embed the core functionality of your
+    // program in their own executable in order to avoid the overhead involved in
+    // subprocessing your CLI tool.
     //
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
     const exe = b.addExecutable(.{
-        .name = "Zigx",
+        .name = "zigx",
         .root_module = b.createModule(.{
             // b.createModule defines a new module just like b.addModule but,
             // unlike b.addModule, it does not expose the module to consumers of
@@ -213,21 +73,16 @@ pub fn build(b: *std.Build) void {
             // List of modules available for import in source files part of the
             // root module.
             .imports = &.{
-                // Here "Zigx" is the name you will use in your source code to
-                // import this module (e.g. `@import("Zigx")`). The name is
+                // Here "zigx" is the name you will use in your source code to
+                // import this module (e.g. `@import("zigx")`). The name is
                 // repeated because you are allowed to rename your imports, which
                 // can be extremely useful in case of collisions (which can happen
                 // importing modules from different packages).
-                .{ .name = "Zigx", .module = mod },
-                // render_tree is used by generated server code
-                .{ .name = "render_tree", .module = render_tree_native_mod },
+                .{ .name = "zigx", .module = mod },
             },
         }),
     });
-    // Ensure generator runs before compilation
-    exe.step.dependOn(&zigx_files_scanner.step);
-    // Also build and install WASM clients before the server (so @embedFile works)
-    exe.step.dependOn(&install_wasm.step);
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
@@ -266,7 +121,6 @@ pub fn build(b: *std.Build) void {
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });
-    mod_tests.step.dependOn(&zigx_files_scanner.step);
 
     // A run step that will run the test executable.
     const run_mod_tests = b.addRunArtifact(mod_tests);
@@ -277,7 +131,6 @@ pub fn build(b: *std.Build) void {
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
     });
-    exe_tests.step.dependOn(&zigx_files_scanner.step);
 
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
@@ -288,10 +141,6 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
-
-    // Make the default build step depend on tests passing first
-    b.getInstallStep().dependOn(&run_mod_tests.step);
-    b.getInstallStep().dependOn(&run_exe_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
